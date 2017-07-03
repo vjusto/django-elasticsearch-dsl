@@ -8,7 +8,7 @@ from elasticsearch_dsl.document import DocTypeMeta as DSLDocTypeMeta
 from elasticsearch_dsl.field import Field
 
 from .apps import DEDConfig
-from .exceptions import ModelFieldNotMappedError, RedeclaredFieldError
+from .exceptions import ModelFieldNotMappedError, RedeclaredFieldError, UpdateDocNotValidError
 from .fields import (
     BooleanField,
     DateField,
@@ -119,6 +119,9 @@ class DocType(DSLDocType):
         qs = self._doc_type.model._default_manager
         return qs
 
+    def filter_queryset(self, queryset):
+        return queryset
+
     def prepare(self, instance):
         """
         Take a model instance, and turn it into a dict that can be serialized
@@ -169,14 +172,33 @@ class DocType(DSLDocType):
             kwargs['refresh'] = True
 
         if isinstance(thing, models.Model):
-            thing = [thing]
+            new_qs = [thing]
+            count = 1
+        elif isinstance(thing, models.Manager):
+            new_qs = self.filter_queryset(thing.get_queryset())
+            count = thing.count()
+        else:
+            raise UpdateDocNotValidError(
+                'Type {} is not valid for updating the document'.format(type(thing))
+            )
 
-        actions = ({
-            '_op_type': action,
-            '_index': str(self._doc_type.index),
-            '_type': self._doc_type.mapping.doc_type,
-            '_id': model.pk,
-            '_source': self.prepare(model) if action != 'delete' else None,
-        } for model in thing)
+        offset = 0
+        if count < 10000:
+            size = count
+        else:
+            size = 10000
 
-        return self.bulk(actions, **kwargs)
+        while count > 0:
+            actions = (
+                {
+                    '_op_type': action,
+                    '_index': str(self._doc_type.index),
+                    '_type': self._doc_type.mapping.doc_type,
+                    '_id': model.pk,
+                    '_source': self.prepare(model) if action != 'delete' else None,
+                } for model in new_qs[offset:(offset + size)]
+            )
+
+            self.bulk(actions, **kwargs)
+            offset += size
+            count -= size
