@@ -166,10 +166,7 @@ class DocType(DSLDocType):
         """
         Update each document in ES for a model, iterable of models or queryset
         """
-        if refresh is True or (
-            refresh is None and self._doc_type.auto_refresh
-        ):
-            kwargs['refresh'] = True
+        kwargs['refresh'] = False
 
         if isinstance(thing, models.Model):
             new_qs = [thing]
@@ -189,6 +186,9 @@ class DocType(DSLDocType):
             size = 10000
 
         while count > 0:
+            if count <= size:
+                kwargs['refresh'] = True
+
             actions = (
                 {
                     '_op_type': action,
